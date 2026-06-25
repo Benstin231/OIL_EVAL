@@ -37,7 +37,7 @@ import sys
 
 from lcb_loader import load_problems
 
-DEFAULT_SRC = r"livebench\data\live_bench\coding\LCB_generation\question.jsonl"
+DEFAULT_SRC = r"question.jsonl"
 DEFAULT_OUT = "hard_subset.jsonl"
 DEFAULT_N   = 5
 
