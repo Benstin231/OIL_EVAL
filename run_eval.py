@@ -21,6 +21,10 @@ Two execution modes, decided per test by `testtype`:
                    one literal positional arg per line, calls
                    Solution().<fn_name>(*args), and compares the return value.
 
+If a problem fails, the harness retries by feeding the previous code and the
+first failing test back to generate() and asking for a fix, up to
+`--max-retries` times (stops early as soon as a problem passes).
+
 Output: per-problem PASS/FAIL with the first failing test, an overall score,
 and full detail written to results.json.
 
@@ -43,6 +47,7 @@ USAGE
   python run_eval.py                               # defaults to hard_subset.jsonl
   python run_eval.py --subset hard_subset.jsonl --timeout 10
   python run_eval.py --max-tests 5                 # cap tests/problem for a quick smoke run
+  python run_eval.py --max-retries 3                # retry failing problems up to 3 times
 
 The single pluggable hook is generate() below — swap it for a direct call into
 the students' orchestrator (see the comment there).
@@ -244,6 +249,25 @@ def run_functional_test(py: str, driver_path: str, test: dict,
 
 
 # ---------------------------------------------------------------------------
+# Retry prompt
+# ---------------------------------------------------------------------------
+def build_retry_prompt(original_prompt: str, prev_code: str, first_failure: dict) -> str:
+    """Feed the previous attempt's code and its first failing test back to the
+    model, asking for a corrected program."""
+    return (
+        f"{original_prompt}\n\n"
+        "Your previous attempt below failed on a test case. Fix the bug and "
+        "return a corrected, complete Python program. Enclose the code in a "
+        "```python fenced block.\n\n"
+        f"Previous code:\n```python\n{prev_code}\n```\n\n"
+        f"Failing test #{first_failure['index']} ({first_failure['type']}):\n"
+        f"Input:\n{first_failure['input']}\n"
+        f"Expected output:\n{first_failure['expected']}\n"
+        f"Your code produced:\n{first_failure['got']}\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Evaluate one problem
 # ---------------------------------------------------------------------------
 def evaluate_problem(p: dict, code: str, timeout: float, max_tests: int) -> dict:
@@ -317,6 +341,8 @@ def main() -> None:
                     help="Per-test timeout in seconds")
     ap.add_argument("--max-tests", type=int, default=0,
                     help="Cap tests per problem (0 = all). Use for quick smoke runs.")
+    ap.add_argument("--max-retries", type=int, default=2,
+                    help="Retries per problem after a failed attempt (0 = no retries).")
     args = ap.parse_args()
 
     if not os.path.exists(args.subset):
@@ -331,23 +357,40 @@ def main() -> None:
     for n, p in enumerate(problems, 1):
         title = p.get("title", "(untitled)")
         diff = p.get("difficulty", "?")
-        prompt = p["prompt"]
+        original_prompt = p["prompt"]
 
-        try:
-            reply = generate(prompt)
-        except Exception as exc:
-            print(f"[{n}/{len(problems)}] ERROR  generate() failed: {exc}")
-            results.append({**_meta(p), "solved": False, "error": str(exc)})
+        prompt = original_prompt
+        code = ""
+        reply = ""
+        ev = None
+        error = None
+        attempt = 0
+
+        for attempt in range(1, args.max_retries + 2):  # 1 initial + N retries
+            try:
+                reply = generate(prompt)
+            except Exception as exc:
+                error = str(exc)
+                print(f"[{n}/{len(problems)}] ERROR  generate() failed (attempt {attempt}): {exc}")
+                break
+
+            code = extract_code(reply)
+            ev = evaluate_problem(p, code, args.timeout, args.max_tests)
+            if ev["solved"] or attempt == args.max_retries + 1:
+                break
+
+            prompt = build_retry_prompt(original_prompt, code, ev["first_failure"])
+
+        if error is not None:
+            results.append({**_meta(p), "solved": False, "error": error, "attempts": attempt})
             continue
 
-        code = extract_code(reply)
-        ev = evaluate_problem(p, code, args.timeout, args.max_tests)
         if ev["solved"]:
             solved += 1
 
         status = "PASS" if ev["solved"] else "FAIL"
         line = (f"[{n}/{len(problems)}] {status}  {diff:6s}  {title:<48} "
-                f"({ev['tests_passed']}/{ev['num_tests']})")
+                f"({ev['tests_passed']}/{ev['num_tests']})  attempts={attempt}")
         if not ev["solved"] and ev["first_failure"]:
             ff = ev["first_failure"]
             line += f"  test#{ff['index']} {ff['type']}"
@@ -358,7 +401,7 @@ def main() -> None:
             print(f"        expected: {ff['expected']!r}")
             print(f"        got:      {ff['got']!r}")
 
-        results.append({**_meta(p), **ev, "code": code, "reply_len": len(reply)})
+        results.append({**_meta(p), **ev, "code": code, "reply_len": len(reply), "attempts": attempt})
 
     total = len(problems)
     score = solved / total if total else 0.0
@@ -368,8 +411,9 @@ def main() -> None:
         json.dump({
             "summary": {
                 "total": total, "solved": solved, "score": score,
-                "model": os.environ.get("MODEL_NAME", "(default)"),
+                "model": os.environ.get("GEMMA_MODEL", "(default)"),
                 "timeout": args.timeout, "max_tests": args.max_tests,
+                "max_retries": args.max_retries,
             },
             "results": results,
         }, fh, indent=2, ensure_ascii=False)
