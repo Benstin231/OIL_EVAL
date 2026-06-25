@@ -24,8 +24,8 @@ Two execution modes, decided per test by `testtype`:
 Output: per-problem PASS/FAIL with the first failing test, an overall score,
 and full detail written to results.json.
 
-Stdlib only, except the optional `openai` package used by the default
-generate() hook. Runs on Windows.
+Stdlib only, except the optional `google-genai` and `python-dotenv` packages
+used by the default generate() hook. Runs on Windows.
 
 ------------------------------------------------------------------------------
 USAGE
@@ -34,10 +34,10 @@ USAGE
   python select_hard.py --n 5
   python select_hard.py --n 8 --include-atcoder
 
-  # 2. point the default hook at your Gemma 4 (OpenAI-compatible) server
-  set MODEL_API_BASE=http://localhost:8000/v1     (Windows: use `set`)
-  set MODEL_NAME=gemma-4
-  set MODEL_API_KEY=sk-anything                    (often unused locally)
+  # 2. fill in .env with your Gemini API key + Gemma 4 model name
+  GEMINI_API_KEY=...
+  GEMMA_MODEL=gemma-4-26b-a4b-it
+  GEMMA_THINKING_LEVEL=high
 
   # 3. run the eval
   python run_eval.py                               # defaults to hard_subset.jsonl
@@ -63,10 +63,10 @@ def generate(prompt: str) -> str:
     """
     Turn a problem prompt into a complete Python program (as a string).
 
-    DEFAULT: call an OpenAI-compatible chat endpoint configured via env vars:
-        MODEL_API_BASE   e.g. http://localhost:8000/v1   (your Gemma 4 server)
-        MODEL_NAME       e.g. gemma-4
-        MODEL_API_KEY    e.g. sk-anything  (many local servers ignore this)
+    DEFAULT: call Gemma 4 through the Gemini API, configured via .env:
+        GEMINI_API_KEY         your AI Studio API key (https://aistudio.google.com/apikey)
+        GEMMA_MODEL            e.g. gemma-4-26b-a4b-it | gemma-4-31b-it
+        GEMMA_THINKING_LEVEL   optional, "high" enables Gemma 4's thinking process
 
     ---------------------------------------------------------------------------
     TO PLUG IN THE STUDENTS' ORCHESTRATOR INSTEAD, replace this whole body with:
@@ -78,31 +78,43 @@ def generate(prompt: str) -> str:
     loop lives behind solve(); this harness just measures whether the final
     program passes the tests.
     ---------------------------------------------------------------------------
-
-    NOTE on litellm: if you route through litellm instead of the openai client,
-    do NOT use a `gemma/` or `google/` model prefix (not valid providers). Use
-    `openai/<name>` with api_base set, or `ollama/<name>`.
     """
     try:
-        from openai import OpenAI
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # .env loading is optional; env vars may already be set
+
+    try:
+        from google import genai
+        from google.genai import types
     except ImportError:
         sys.exit(
-            "The default generate() hook needs the `openai` package.\n"
-            "  pip install openai\n"
+            "The default generate() hook needs the `google-genai` package.\n"
+            "  pip install google-genai python-dotenv\n"
             "...or replace generate() with a direct orchestrator.solve(prompt) call."
         )
 
-    base = os.environ.get("MODEL_API_BASE", "http://localhost:8000/v1")
-    model = os.environ.get("MODEL_NAME", "gemma-4")
-    key = os.environ.get("MODEL_API_KEY", "not-needed")
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        sys.exit("GEMINI_API_KEY is not set. Fill it in .env (see .env.example).")
 
-    client = OpenAI(base_url=base, api_key=key)
-    resp = client.chat.completions.create(
+    model = os.environ.get("GEMMA_MODEL", "gemma-4-26b-a4b-it")
+    thinking_level = os.environ.get("GEMMA_THINKING_LEVEL")
+
+    client = genai.Client(api_key=api_key)
+    config = None
+    if thinking_level:
+        config = types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
+        )
+
+    resp = client.models.generate_content(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
+        contents=prompt,
+        config=config,
     )
-    return resp.choices[0].message.content or ""
+    return resp.text or ""
 
 
 # ---------------------------------------------------------------------------
