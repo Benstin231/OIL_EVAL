@@ -60,6 +60,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 # ---------------------------------------------------------------------------
 # THE ONE PLUGGABLE HOOK
@@ -249,6 +250,34 @@ def run_functional_test(py: str, driver_path: str, test: dict,
 
 
 # ---------------------------------------------------------------------------
+# API-level retry (transient server errors: 500, 503, connection failures)
+# Separate from the prompt-level retry loop in main().
+# ---------------------------------------------------------------------------
+_API_RETRY_ATTEMPTS = 3
+_API_RETRY_BACKOFF  = [5, 15]  # seconds to wait before 2nd and 3rd attempt
+
+def _generate_with_api_retry(prompt: str) -> str:
+    """Call generate() and retry on transient API errors (500/503/connection).
+    Raises the last exception if all attempts fail."""
+    last_exc = None
+    for i in range(_API_RETRY_ATTEMPTS):
+        try:
+            return generate(prompt)
+        except Exception as exc:
+            msg = str(exc)
+            # Only retry on transient server-side errors
+            if not any(code in msg for code in ("500", "503", "Connection")):
+                raise
+            last_exc = exc
+            if i < len(_API_RETRY_BACKOFF):
+                wait = _API_RETRY_BACKOFF[i]
+                print(f"        [api-retry {i+1}/{_API_RETRY_ATTEMPTS-1}] "
+                      f"{msg[:80]} — retrying in {wait}s…")
+                time.sleep(wait)
+    raise last_exc
+
+
+# ---------------------------------------------------------------------------
 # Retry prompt
 # ---------------------------------------------------------------------------
 def build_retry_prompt(original_prompt: str, prev_code: str, first_failure: dict) -> str:
@@ -368,7 +397,7 @@ def main() -> None:
 
         for attempt in range(1, args.max_retries + 2):  # 1 initial + N retries
             try:
-                reply = generate(prompt)
+                reply = _generate_with_api_retry(prompt)
             except Exception as exc:
                 error = str(exc)
                 print(f"[{n}/{len(problems)}] ERROR  generate() failed (attempt {attempt}): {exc}")
