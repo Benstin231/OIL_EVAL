@@ -1,6 +1,9 @@
 # Environment variables / secrets
 .env
 
+# Large dataset file (218 MB — download separately)
+question.jsonl
+
 # Python
 __pycache__/
 *.pyc
