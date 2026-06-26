@@ -27,12 +27,17 @@ Usage
     # 8 hard problems, include AtCoder stdin problems too
     python select_hard.py --n 8 --include-atcoder
 
+    # Random sample from hard problems (different set each run)
+    python select_hard.py --random
+    python select_hard.py --random --seed 42   # reproducible random
+
     # Custom source / output
     python select_hard.py --src path/to/question.jsonl --out my_subset.jsonl
 """
 
 import argparse
 import json
+import random
 import sys
 
 from lcb_loader import load_problems
@@ -51,14 +56,22 @@ def rank_key(p: dict) -> tuple:
     return (d, tiebreak)
 
 
-def select(problems: list, n: int, include_atcoder: bool) -> list:
+def select(problems: list, n: int, include_atcoder: bool,
+           random_sample: bool = False, seed: int = None) -> list:
     candidates = problems
     if not include_atcoder:
         candidates = [p for p in problems if p["platform"] == "leetcode"]
 
-    candidates.sort(key=rank_key)
+    if random_sample:
+        # Filter to hard problems first, then random-sample from that pool
+        hard = [p for p in candidates if p["difficulty"] == "hard"]
+        pool = hard if hard else candidates
+        rng = random.Random(seed)
+        chosen = rng.sample(pool, min(n, len(pool)))
+    else:
+        candidates.sort(key=rank_key)
+        chosen = candidates[:n]
 
-    chosen = candidates[:n]
     if len(chosen) < n:
         print(
             f"  [warn] only {len(chosen)} candidates available "
@@ -85,10 +98,14 @@ def main() -> None:
                         help="Number of problems to select")
     parser.add_argument("--include-atcoder", action="store_true",
                         help="Include AtCoder (stdin) problems in the pool")
+    parser.add_argument("--random", action="store_true",
+                        help="Randomly sample from hard problems instead of always taking the top-N")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed for reproducible sampling (only used with --random)")
     args = parser.parse_args()
 
     problems = load_problems(args.src)
-    chosen   = select(problems, args.n, args.include_atcoder)
+    chosen   = select(problems, args.n, args.include_atcoder, args.random, args.seed)
 
     print(f"\nSelected {len(chosen)} problems:")
     for p in chosen:
