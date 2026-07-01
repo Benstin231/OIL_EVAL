@@ -70,16 +70,44 @@ different control flow.
 
 ### LLM call layer
 
-A single OpenAI-compatible client wraps every model call:
+No single aggregator (e.g. OpenRouter) is available yet — the harness has direct API keys for
+two independent OpenAI-compatible endpoints (DeepSeek's official API, Alibaba DashScope's
+compatible-mode endpoint). So instead of one shared `base_url`/`api_key`, `orchestrator.py` keeps
+a small **provider registry** mapping a provider name to its base_url + api_key env var names:
 
 ```python
-LLM_API_KEY=...
-LLM_BASE_URL=https://openrouter.ai/api/v1
+PROVIDERS = {
+    "deepseek": {"base_url_env": "DEEPSEEK_BASE_URL", "api_key_env": "DEEPSEEK_API_KEY"},
+    "qwen":     {"base_url_env": "QWEN_BASE_URL",     "api_key_env": "QWEN_API_KEY"},
+    "mimo":     {"base_url_env": "MIMO_BASE_URL",     "api_key_env": "MIMO_API_KEY"},
+    "gemma":    {"base_url_env": "GEMMA_BASE_URL",    "api_key_env": "GEMINI_API_KEY"},
+}
 ```
 
-`_chat(model: str, prompt: str) -> str` wraps `openai.OpenAI(base_url=..., api_key=...).chat.completions.create(...)`
-and reuses the existing transient-error retry logic (currently `_generate_with_api_retry`,
-generalized to accept a model name).
+`gemma` reuses the existing `GEMINI_API_KEY` and points at Gemini's OpenAI-compatible endpoint
+(`GEMMA_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`), so the model already
+configured for today's `generate()` hook is available as a `gemma/<model-name>` role model too —
+rounding out the original four candidates (gemma, deepseek, qwen, mimo) for single-model mode.
+
+Every role's model is configured as `provider/model` (e.g. `deepseek/deepseek-v4-flash`,
+`qwen/qwen3.7-plus`). `_chat(role_model: str, prompt: str) -> str` splits on the first `/`, looks
+up the provider's base_url/key, builds (or reuses a cached) `openai.OpenAI(base_url=..., api_key=...)`
+client, and calls `chat.completions.create(model=model_name, ...)`. This reuses the existing
+transient-error retry logic (currently `_generate_with_api_retry`, generalized to accept a
+role-model string instead of assuming a single fixed model).
+
+Adding a real aggregator (OpenRouter) or another direct provider later is just one more entry in
+`PROVIDERS` plus its `.env` vars — the rest of the orchestrator is unaffected.
+
+```
+# .env
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_API_KEY=...
+QWEN_BASE_URL=https://ws-ewvaxo6vfthtzkjd.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+QWEN_API_KEY=...
+MIMO_BASE_URL=https://api.xiaomimimo.com/v1
+MIMO_API_KEY=...
+```
 
 ### Strategy & role configuration
 
@@ -88,12 +116,12 @@ Configured via `.env`, with `--strategy` as a CLI override (takes precedence ove
 
 ```
 STRATEGY=single                        # single | analyze-then-code | debate
-SINGLE_MODEL=google/gemma-4-26b-a4b-it
-ARCHITECT_MODEL=...
-CODER_MODEL=...
-DEBATER1_MODEL=deepseek/deepseek-r1
-DEBATER2_MODEL=qwen/qwen3-235b
-JUDGE_MODEL=google/gemma-4-26b-a4b-it
+SINGLE_MODEL=deepseek/deepseek-v4-flash
+ARCHITECT_MODEL=deepseek/deepseek-v4-flash
+CODER_MODEL=qwen/qwen3.7-plus
+DEBATER1_MODEL=deepseek/deepseek-v4-flash
+DEBATER2_MODEL=qwen/qwen3.7-plus
+JUDGE_MODEL=deepseek/deepseek-v4-flash
 ```
 
 ### Strategy behaviors
@@ -167,6 +195,9 @@ empty; analyze-then-code: `plan_events` only; debate: `debate_events` only).
   (e.g., `STRATEGY=debate` requires `DEBATER1_MODEL`, `DEBATER2_MODEL`, `JUDGE_MODEL`, `CODER_MODEL`
   to all be set).
 - Unknown `--strategy` / `STRATEGY` value → fail fast with the list of valid values.
+- A role model string with an unknown provider prefix (not in `PROVIDERS`), or a known provider
+  missing its `base_url`/`api_key` env vars → fail fast at startup with a clear message naming the
+  offending role and provider.
 - Transient API errors (500/503/connection) during any role's call → retried with the existing
   backoff (5s, 15s), same as today, generalized across all model calls (not just the single
   `generate()` hook).
@@ -176,22 +207,44 @@ empty; analyze-then-code: `plan_events` only; debate: `debate_events` only).
 
 ## Testing
 
-- No existing automated tests for the harness (noted as a known gap in the README). This spec
-  doesn't add a test suite — consistent with the project's current scope — but manual verification
-  before considering this done:
-  - `STRATEGY=single` end-to-end run reproduces today's behavior (same pass/fail on a fixed
-    subset).
-  - `STRATEGY=analyze-then-code` and `STRATEGY=debate` runs complete without crashing and produce
-    populated `plan_events`/`debate_events` in the log.
-  - A retry (forced via a deliberately-broken model reply or a known-hard problem) confirms `plan`
-    is reused unchanged across attempts and only the coder step re-runs.
-  - `logs/run_*.json` is valid JSON and contains one entry per problem with the expected event
-    shape for the strategy used.
+The harness has no automated tests today (noted as a known gap in the README), but the user asked
+for TDD wherever it's a good fit. The new orchestrator logic is mostly pure functions (string/dict
+in, string/dict out) with the network call as the only side effect, so it's a good fit: write
+tests first for everything except the literal HTTP call itself.
+
+**TDD, with `_chat()`'s network call mocked/injected:**
+- Provider registry lookup: `provider/model` string parsing, unknown-provider error, missing
+  base_url/api_key error.
+- Strategy dispatch: `plan()` returns `None` for `single`, calls architect once for
+  `analyze-then-code`, runs the 2-round debate + judge sequence for `debate` (assert call order
+  and prompt contents, e.g. round 2 prompts include round 1's replies).
+- `code()` prompt construction: with/without a plan, with/without `prev_code`/`failure` (retry
+  case) — assert the right pieces show up in the prompt sent to the coder model.
+- Fail-fast startup validation: missing role env vars per strategy, unknown strategy name, unknown
+  provider prefix.
+- Log event assembly: given a sequence of mocked plan/debate/code calls, assert the resulting
+  `plan_events`/`debate_events`/`attempts` structure matches the schema above, and that the file
+  written is valid JSON.
+- `run_eval.py`'s retry loop calling `code()` with the same `plan` across attempts (i.e., `plan()`
+  is called exactly once per problem regardless of retry count).
+
+**Manual / integration verification (not unit-testable without hitting real APIs):**
+- Keep these runs token-cheap: `select_hard.py --n 1` (a 1-problem subset) and
+  `run_eval.py --max-tests 1 --max-retries 0`, since the goal is to confirm wiring/plumbing works,
+  not to measure real solve rate.
+- `STRATEGY=single` end-to-end run against a real model reproduces today's behavior (same
+  pass/fail on a fixed subset).
+- `STRATEGY=analyze-then-code` and `STRATEGY=debate` runs complete end-to-end against real
+  DeepSeek/Qwen/MiMo endpoints without crashing, and `logs/run_*.json` contains the expected
+  populated events for the strategy used.
 
 ## Open items resolved during brainstorming
 
-- Model access: OpenRouter / OpenAI-compatible API (not native per-provider SDKs, not local
-  Ollama/vLLM).
+- Model access: OpenAI-compatible API per provider, via a small provider registry (DeepSeek
+  official API, Alibaba DashScope compatible-mode — not a single aggregator, not native
+  per-provider SDKs, not local Ollama/vLLM). `logs/` and `.env` stay gitignored since both can
+  carry sensitive content (API keys; full prompts/replies that may echo problem statements or
+  proprietary reasoning).
 - Hybrid flow: both `analyze-then-code` and `debate` supported as switchable strategies.
 - Retry scope: coder-only re-run, plan/debate stage runs once per problem.
 - Debate composition: 2 debater models + 1 judge model, fixed 2 rounds, not configurable.
