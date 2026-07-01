@@ -56,88 +56,12 @@ the students' orchestrator (see the comment there).
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
 import time
 
 import orchestrator
-
-# ---------------------------------------------------------------------------
-# THE ONE PLUGGABLE HOOK
-# ---------------------------------------------------------------------------
-def generate(prompt: str) -> str:
-    """
-    Turn a problem prompt into a complete Python program (as a string).
-
-    DEFAULT: call Gemma 4 through the Gemini API, configured via .env:
-        GEMINI_API_KEY         your AI Studio API key (https://aistudio.google.com/apikey)
-        GEMMA_MODEL            e.g. gemma-4-26b-a4b-it | gemma-4-31b-it
-        GEMMA_THINKING_LEVEL   optional, "high" enables Gemma 4's thinking process
-
-    ---------------------------------------------------------------------------
-    TO PLUG IN THE STUDENTS' ORCHESTRATOR INSTEAD, replace this whole body with:
-
-        import orchestrator
-        return orchestrator.solve(prompt)        # must return a Python program
-
-    That is the entire integration point. The orchestrator's iterative refine
-    loop lives behind solve(); this harness just measures whether the final
-    program passes the tests.
-    ---------------------------------------------------------------------------
-    """
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass  # .env loading is optional; env vars may already be set
-
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError:
-        sys.exit(
-            "The default generate() hook needs the `google-genai` package.\n"
-            "  pip install google-genai python-dotenv\n"
-            "...or replace generate() with a direct orchestrator.solve(prompt) call."
-        )
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        sys.exit("GEMINI_API_KEY is not set. Fill it in .env (see .env.example).")
-
-    model = os.environ.get("GEMMA_MODEL", "gemma-4-26b-a4b-it")
-    thinking_level = os.environ.get("GEMMA_THINKING_LEVEL")
-
-    client = genai.Client(api_key=api_key)
-    config = None
-    if thinking_level:
-        config = types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
-        )
-
-    resp = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=config,
-    )
-    return resp.text or ""
-
-
-# ---------------------------------------------------------------------------
-# Code extraction
-# ---------------------------------------------------------------------------
-_FENCE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
-
-def extract_code(text: str) -> str:
-    """Pull the program out of a model reply. Prefer a ```python fenced block;
-    if several, take the longest; fall back to the raw text."""
-    blocks = _FENCE.findall(text or "")
-    if blocks:
-        return max(blocks, key=len).strip()
-    return (text or "").strip()
-
 
 # ---------------------------------------------------------------------------
 # Functional driver template
@@ -249,53 +173,6 @@ def run_functional_test(py: str, driver_path: str, test: dict,
     return {"ok": payload["ok"],
             "type": "OK" if payload["ok"] else "WRONG_ANSWER",
             "got": str(payload.get("got", ""))[:500]}
-
-
-# ---------------------------------------------------------------------------
-# API-level retry (transient server errors: 500, 503, connection failures)
-# Separate from the prompt-level retry loop in main().
-# ---------------------------------------------------------------------------
-_API_RETRY_ATTEMPTS = 3
-_API_RETRY_BACKOFF  = [5, 15]  # seconds to wait before 2nd and 3rd attempt
-
-def _generate_with_api_retry(prompt: str) -> str:
-    """Call generate() and retry on transient API errors (500/503/connection).
-    Raises the last exception if all attempts fail."""
-    last_exc = None
-    for i in range(_API_RETRY_ATTEMPTS):
-        try:
-            return generate(prompt)
-        except Exception as exc:
-            msg = str(exc)
-            # Only retry on transient server-side errors
-            if not any(code in msg for code in ("500", "503", "Connection")):
-                raise
-            last_exc = exc
-            if i < len(_API_RETRY_BACKOFF):
-                wait = _API_RETRY_BACKOFF[i]
-                print(f"        [api-retry {i+1}/{_API_RETRY_ATTEMPTS-1}] "
-                      f"{msg[:80]} — retrying in {wait}s…")
-                time.sleep(wait)
-    raise last_exc
-
-
-# ---------------------------------------------------------------------------
-# Retry prompt
-# ---------------------------------------------------------------------------
-def build_retry_prompt(original_prompt: str, prev_code: str, first_failure: dict) -> str:
-    """Feed the previous attempt's code and its first failing test back to the
-    model, asking for a corrected program."""
-    return (
-        f"{original_prompt}\n\n"
-        "Your previous attempt below failed on a test case. Fix the bug and "
-        "return a corrected, complete Python program. Enclose the code in a "
-        "```python fenced block.\n\n"
-        f"Previous code:\n```python\n{prev_code}\n```\n\n"
-        f"Failing test #{first_failure['index']} ({first_failure['type']}):\n"
-        f"Input:\n{first_failure['input']}\n"
-        f"Expected output:\n{first_failure['expected']}\n"
-        f"Your code produced:\n{first_failure['got']}\n"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -429,65 +306,60 @@ def main() -> None:
                     help="Cap tests per problem (0 = all). Use for quick smoke runs.")
     ap.add_argument("--max-retries", type=int, default=2,
                     help="Retries per problem after a failed attempt (0 = no retries).")
+    ap.add_argument("--strategy", default=None,
+                    help="single | analyze-then-code | debate "
+                         "(default: STRATEGY env var, else 'single')")
     args = ap.parse_args()
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    strategy = args.strategy or os.environ.get("STRATEGY", "single")
+    try:
+        orchestrator.validate_config(strategy)
+    except orchestrator.ConfigError as exc:
+        sys.exit(str(exc))
 
     if not os.path.exists(args.subset):
         sys.exit(f"Subset file not found: {args.subset}\n"
                  f"Run:  python select_hard.py --n 5")
 
     problems = load_subset(args.subset)
-    print(f"Loaded {len(problems)} problems from {args.subset}\n")
+    print(f"Loaded {len(problems)} problems from {args.subset}  [strategy={strategy}]\n")
 
     results = []
+    log_problems = []
     solved = 0
     for n, p in enumerate(problems, 1):
         title = p.get("title", "(untitled)")
         diff = p.get("difficulty", "?")
-        original_prompt = p["prompt"]
 
-        prompt = original_prompt
-        code = ""
-        reply = ""
-        ev = None
-        error = None
-        attempt = 0
+        result, log_entry = solve_problem(p, strategy, args.timeout, args.max_tests, args.max_retries)
+        log_problems.append(log_entry)
+        results.append(result)
 
-        for attempt in range(1, args.max_retries + 2):  # 1 initial + N retries
-            try:
-                reply = _generate_with_api_retry(prompt)
-            except Exception as exc:
-                error = str(exc)
-                print(f"[{n}/{len(problems)}] ERROR  generate() failed (attempt {attempt}): {exc}")
-                break
-
-            code = extract_code(reply)
-            ev = evaluate_problem(p, code, args.timeout, args.max_tests)
-            if ev["solved"] or attempt == args.max_retries + 1:
-                break
-
-            prompt = build_retry_prompt(original_prompt, code, ev["first_failure"])
-
-        if error is not None:
-            results.append({**_meta(p), "solved": False, "error": error, "attempts": attempt})
+        if "error" in result:
+            print(f"[{n}/{len(problems)}] ERROR  {title}: {result['error']}")
             continue
 
-        if ev["solved"]:
+        if result["solved"]:
             solved += 1
 
-        status = "PASS" if ev["solved"] else "FAIL"
+        status = "PASS" if result["solved"] else "FAIL"
         line = (f"[{n}/{len(problems)}] {status}  {diff:6s}  {title:<48} "
-                f"({ev['tests_passed']}/{ev['num_tests']})  attempts={attempt}")
-        if not ev["solved"] and ev["first_failure"]:
-            ff = ev["first_failure"]
+                f"({result['tests_passed']}/{result['num_tests']})  attempts={result['attempts']}")
+        if not result["solved"] and result["first_failure"]:
+            ff = result["first_failure"]
             line += f"  test#{ff['index']} {ff['type']}"
         print(line)
-        if not ev["solved"] and ev["first_failure"]:
-            ff = ev["first_failure"]
+        if not result["solved"] and result["first_failure"]:
+            ff = result["first_failure"]
             print(f"        input:    {ff['input']!r}")
             print(f"        expected: {ff['expected']!r}")
             print(f"        got:      {ff['got']!r}")
-
-        results.append({**_meta(p), **ev, "code": code, "reply_len": len(reply), "attempts": attempt})
 
     total = len(problems)
     score = solved / total if total else 0.0
@@ -497,13 +369,26 @@ def main() -> None:
         json.dump({
             "summary": {
                 "total": total, "solved": solved, "score": score,
-                "model": os.environ.get("GEMMA_MODEL", "(default)"),
+                "strategy": strategy, "models": orchestrator.active_role_models(strategy),
                 "timeout": args.timeout, "max_tests": args.max_tests,
                 "max_retries": args.max_retries,
             },
             "results": results,
         }, fh, indent=2, ensure_ascii=False)
     print(f"Wrote detail -> {args.out}")
+
+    run_id = time.strftime("%Y%m%d_%H%M%S")
+    log_path = os.path.join("logs", f"run_{run_id}.json")
+    run_log = {
+        "run_id": run_id,
+        "config": {
+            "strategy": strategy, "models": orchestrator.active_role_models(strategy),
+            "subset": args.subset, "max_retries": args.max_retries,
+        },
+        "problems": log_problems,
+    }
+    orchestrator.write_run_log(log_path, run_log)
+    print(f"Wrote detailed log -> {log_path}")
 
 
 def _meta(p: dict) -> dict:

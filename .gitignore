@@ -11,3 +11,4 @@ __pycache__/
 # Generated artifacts
 hard_subset.jsonl
 results.json
+logs/
