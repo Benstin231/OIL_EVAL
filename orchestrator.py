@@ -202,7 +202,7 @@ _ARCHITECT_PROMPT_TMPL = (
 
 
 def _run_analyze_then_code_plan(prompt: str) -> tuple:
-    role_model = os.environ["ARCHITECT_MODEL"]
+    role_model = active_role_models("analyze-then-code")["architect"]
     architect_prompt = _ARCHITECT_PROMPT_TMPL.format(problem=prompt)
     reply, duration = _chat(role_model, architect_prompt)
     event = {
@@ -238,9 +238,10 @@ _JUDGE_TMPL = (
 
 def _run_debate_plan(prompt: str) -> tuple:
     events = []
-    d1_model = os.environ["DEBATER1_MODEL"]
-    d2_model = os.environ["DEBATER2_MODEL"]
-    judge_model = os.environ["JUDGE_MODEL"]
+    role_models = active_role_models("debate")
+    d1_model = role_models["debater1"]
+    d2_model = role_models["debater2"]
+    judge_model = role_models["judge"]
 
     r1_prompt = _DEBATE_ROUND1_TMPL.format(problem=prompt)
     d1_r1, dur = _chat(d1_model, r1_prompt)

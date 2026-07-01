@@ -9,6 +9,7 @@ def test_plan_single_returns_none_and_no_events():
 
 def test_plan_analyze_then_code_calls_architect(monkeypatch):
     monkeypatch.setenv("ARCHITECT_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("CODER_MODEL", "deepseek/deepseek-v4-flash")
     seen = {}
 
     def fake_chat(role_model, prompt):
@@ -41,6 +42,7 @@ def test_plan_debate_runs_two_rounds_plus_judge(monkeypatch):
     monkeypatch.setenv("DEBATER1_MODEL", "deepseek/deepseek-v4-flash")
     monkeypatch.setenv("DEBATER2_MODEL", "qwen/qwen3.7-plus")
     monkeypatch.setenv("JUDGE_MODEL", "mimo/mimo-v2.5")
+    monkeypatch.setenv("CODER_MODEL", "deepseek/deepseek-v4-flash")
 
     calls = []
 
