@@ -67,7 +67,7 @@ overall score, and full detail is written to `results.json`.
 
 ### Prerequisites
 
-* Python 3.9+
+* Python 3 (no `pyproject.toml`/version pin in this repo yet; developed and tested on 3.12)
 * API keys for whichever model providers you plan to use (DeepSeek, Alibaba/Qwen DashScope, MiMo, and/or Gemini)
 
 ### Installation
