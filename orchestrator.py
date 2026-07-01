@@ -15,6 +15,7 @@ full design.
 from __future__ import annotations
 
 import os
+import time
 
 
 class ConfigError(Exception):
@@ -85,3 +86,55 @@ def validate_config(strategy: str) -> None:
     role_models = active_role_models(strategy)
     for role_model in role_models.values():
         _resolve_role_model(role_model)
+
+
+_API_RETRY_ATTEMPTS = 3
+_API_RETRY_BACKOFF = [5, 15]  # seconds to wait before the 2nd and 3rd attempt
+
+_clients = {}
+
+
+def _get_client(base_url: str, api_key: str):
+    key = (base_url, api_key)
+    if key not in _clients:
+        from openai import OpenAI
+        _clients[key] = OpenAI(base_url=base_url, api_key=api_key)
+    return _clients[key]
+
+
+def _call_model_raw(role_model: str, prompt: str) -> str:
+    """One uncached, unretried call to role_model. Split out from _chat so
+    tests can monkeypatch it without a real OpenAI client or network access."""
+    _, model, base_url, api_key = _resolve_role_model(role_model)
+    client = _get_client(base_url, api_key)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.choices[0].message.content or ""
+
+
+def _call_with_retry(role_model: str, prompt: str) -> str:
+    """Call _call_model_raw, retrying on transient errors (500/503/connection)."""
+    last_exc = None
+    for i in range(_API_RETRY_ATTEMPTS):
+        try:
+            return _call_model_raw(role_model, prompt)
+        except Exception as exc:
+            msg = str(exc)
+            if not any(code in msg for code in ("500", "503", "Connection")):
+                raise
+            last_exc = exc
+            if i < len(_API_RETRY_BACKOFF):
+                wait = _API_RETRY_BACKOFF[i]
+                print(f"        [api-retry {i + 1}/{_API_RETRY_ATTEMPTS - 1}] "
+                      f"{msg[:80]} — retrying in {wait}s…")
+                time.sleep(wait)
+    raise last_exc
+
+
+def _chat(role_model: str, prompt: str) -> tuple:
+    """Call role_model with prompt. Returns (reply_text, duration_s)."""
+    start = time.monotonic()
+    reply = _call_with_retry(role_model, prompt)
+    return reply, time.monotonic() - start
