@@ -35,3 +35,48 @@ def test_plan_unknown_strategy_raises():
         assert False, "expected ConfigError"
     except orchestrator.ConfigError:
         pass
+
+
+def test_plan_debate_runs_two_rounds_plus_judge(monkeypatch):
+    monkeypatch.setenv("DEBATER1_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("DEBATER2_MODEL", "qwen/qwen3.7-plus")
+    monkeypatch.setenv("JUDGE_MODEL", "mimo/mimo-v2.5")
+
+    calls = []
+
+    def fake_chat(role_model, prompt):
+        calls.append((role_model, prompt))
+        n = len(calls)
+        if n == 1:
+            return "debater1 round1 approach", 0.1
+        if n == 2:
+            return "debater2 round1 approach", 0.1
+        if n == 3:
+            return "debater1 round2 approach", 0.1
+        if n == 4:
+            return "debater2 round2 approach", 0.1
+        if n == 5:
+            return "final synthesized approach", 0.1
+        raise AssertionError(f"unexpected call #{n}: {role_model}")
+
+    monkeypatch.setattr(orchestrator, "_chat", fake_chat)
+    plan_text, events = orchestrator.plan("debate", "PROBLEM")
+
+    assert plan_text == "final synthesized approach"
+    assert len(calls) == 5
+    assert calls[0][0] == "deepseek/deepseek-v4-flash"
+    assert calls[1][0] == "qwen/qwen3.7-plus"
+    assert calls[4][0] == "mimo/mimo-v2.5"
+    assert [e["role"] for e in events] == [
+        "debater1", "debater2", "debater1", "debater2", "judge"
+    ]
+    assert events[0]["round"] == 1
+    assert events[2]["round"] == 2
+    # round-2 prompts must reference both debaters' round-1 replies
+    assert "debater1 round1 approach" in events[2]["prompt"]
+    assert "debater2 round1 approach" in events[2]["prompt"]
+    assert "debater1 round1 approach" in events[3]["prompt"]
+    assert "debater2 round1 approach" in events[3]["prompt"]
+    # judge prompt must reference both debaters' round-2 replies
+    assert "debater1 round2 approach" in events[4]["prompt"]
+    assert "debater2 round2 approach" in events[4]["prompt"]

@@ -211,6 +211,62 @@ def _run_analyze_then_code_plan(prompt: str) -> tuple:
     return reply, [event]
 
 
+_DEBATE_ROUND1_TMPL = (
+    "{problem}\n\n"
+    "Propose a solution approach for this problem in plain text: the key idea, "
+    "algorithm, and complexity. Do NOT write code yet."
+)
+
+_DEBATE_ROUND2_TMPL = (
+    "{problem}\n\n"
+    "You proposed this approach:\n{own}\n\n"
+    "A different model proposed this approach instead:\n{other}\n\n"
+    "Critique the other approach, defend or revise your own, and state your final "
+    "recommended approach in plain text. Do NOT write code yet."
+)
+
+_JUDGE_TMPL = (
+    "{problem}\n\n"
+    "Two models debated solution approaches for this problem.\n\n"
+    "Debater A's final position:\n{d1}\n\n"
+    "Debater B's final position:\n{d2}\n\n"
+    "Synthesize a single final solution approach to implement, in plain text. "
+    "Do NOT write code."
+)
+
+
+def _run_debate_plan(prompt: str) -> tuple:
+    events = []
+    d1_model = os.environ["DEBATER1_MODEL"]
+    d2_model = os.environ["DEBATER2_MODEL"]
+    judge_model = os.environ["JUDGE_MODEL"]
+
+    r1_prompt = _DEBATE_ROUND1_TMPL.format(problem=prompt)
+    d1_r1, dur = _chat(d1_model, r1_prompt)
+    events.append({"round": 1, "role": "debater1", "model": d1_model,
+                    "prompt": r1_prompt, "reply": d1_r1, "duration_s": dur})
+    d2_r1, dur = _chat(d2_model, r1_prompt)
+    events.append({"round": 1, "role": "debater2", "model": d2_model,
+                    "prompt": r1_prompt, "reply": d2_r1, "duration_s": dur})
+
+    d1_r2_prompt = _DEBATE_ROUND2_TMPL.format(problem=prompt, own=d1_r1, other=d2_r1)
+    d1_r2, dur = _chat(d1_model, d1_r2_prompt)
+    events.append({"round": 2, "role": "debater1", "model": d1_model,
+                    "prompt": d1_r2_prompt, "reply": d1_r2, "duration_s": dur})
+
+    d2_r2_prompt = _DEBATE_ROUND2_TMPL.format(problem=prompt, own=d2_r1, other=d1_r1)
+    d2_r2, dur = _chat(d2_model, d2_r2_prompt)
+    events.append({"round": 2, "role": "debater2", "model": d2_model,
+                    "prompt": d2_r2_prompt, "reply": d2_r2, "duration_s": dur})
+
+    judge_prompt = _JUDGE_TMPL.format(problem=prompt, d1=d1_r2, d2=d2_r2)
+    judge_reply, dur = _chat(judge_model, judge_prompt)
+    events.append({"role": "judge", "model": judge_model,
+                    "prompt": judge_prompt, "reply": judge_reply, "duration_s": dur})
+
+    return judge_reply, events
+
+
 def plan(strategy: str, prompt: str) -> tuple:
     """Run strategy's planning stage once per problem.
     Returns (plan_text_or_None, events)."""
@@ -219,5 +275,5 @@ def plan(strategy: str, prompt: str) -> tuple:
     if strategy == "analyze-then-code":
         return _run_analyze_then_code_plan(prompt)
     if strategy == "debate":
-        raise NotImplementedError("debate strategy is added in a later task")
+        return _run_debate_plan(prompt)
     raise ConfigError(f"Unknown strategy {strategy!r}; expected one of {STRATEGIES}")
