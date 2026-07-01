@@ -7,11 +7,12 @@ small set of HARD problems.
 For each problem it:
   1. builds a prompt (the LiveBench `turns` text already contains the full
      statement + starter code + "enclose code in ```python" instructions),
-  2. calls generate(prompt) -> a complete Python program,
-  3. extracts the code from the model's reply,
-  4. runs that code against EVERY public + private test in a subprocess with a
+  2. calls orchestrator.plan() -> strategy-specific analysis (or None if single),
+  3. calls orchestrator.code() -> a complete Python program,
+  4. extracts the code from the model's reply,
+  5. runs that code against EVERY public + private test in a subprocess with a
      per-test timeout,
-  5. scores it: a problem is SOLVED only if every single test passes
+  6. scores it: a problem is SOLVED only if every single test passes
      (this is the LiveBench rule).
 
 Two execution modes, decided per test by `testtype`:
@@ -22,14 +23,15 @@ Two execution modes, decided per test by `testtype`:
                    Solution().<fn_name>(*args), and compares the return value.
 
 If a problem fails, the harness retries by feeding the previous code and the
-first failing test back to generate() and asking for a fix, up to
-`--max-retries` times (stops early as soon as a problem passes).
+first failing test back to orchestrator.code() and asking for a fix, up to
+`--max-retries` times (stops early as soon as a problem passes). On retry,
+only the coder step runs again — the planning/debate stage is not repeated.
 
 Output: per-problem PASS/FAIL with the first failing test, an overall score,
 and full detail written to results.json.
 
-Stdlib only, except the optional `google-genai` and `python-dotenv` packages
-used by the default generate() hook. Runs on Windows.
+Dependencies: python-dotenv (for .env loading), openai (used by orchestrator.py
+for all model calls). Runs on Windows.
 
 ------------------------------------------------------------------------------
 USAGE
@@ -38,19 +40,21 @@ USAGE
   python select_hard.py --n 5
   python select_hard.py --n 8 --include-atcoder
 
-  # 2. fill in .env with your Gemini API key + Gemma 4 model name
-  GEMINI_API_KEY=...
-  GEMMA_MODEL=gemma-4-26b-a4b-it
-  GEMMA_THINKING_LEVEL=high
+  # 2. configure orchestrator.py and provider credentials in .env
+  STRATEGY=single                          # or "analyze-then-code" or "debate"
+  SINGLE_MODEL=deepseek/deepseek-v4-flash
+  DEEPSEEK_API_KEY=...
+  DEEPSEEK_BASE_URL=https://api.deepseek.com
 
   # 3. run the eval
   python run_eval.py                               # defaults to hard_subset.jsonl
   python run_eval.py --subset hard_subset.jsonl --timeout 10
+  python run_eval.py --strategy analyze-then-code  # override STRATEGY env var
   python run_eval.py --max-tests 5                 # cap tests/problem for a quick smoke run
   python run_eval.py --max-retries 3                # retry failing problems up to 3 times
 
-The single pluggable hook is generate() below — swap it for a direct call into
-the students' orchestrator (see the comment there).
+See .env.example for all available providers and role-model configuration options.
+The integration point is orchestrator.py's plan()/code() functions.
 """
 
 import argparse

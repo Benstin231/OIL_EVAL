@@ -44,7 +44,7 @@ python select_hard.py --n 5 --random            # random sample from hard pool
 python select_hard.py --n 5 --random --seed 42  # reproducible random sample
 python select_hard.py --n 8 --include-atcoder   # include AtCoder problems too
 
-# 3. Run the eval
+# 2. Run the eval
 python run_eval.py                          # defaults: hard_subset.jsonl, 2 retries, STRATEGY env var (else "single")
 python run_eval.py --strategy single             # one model solves directly
 python run_eval.py --strategy analyze-then-code  # architect model plans, coder model implements
