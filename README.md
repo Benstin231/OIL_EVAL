@@ -1,6 +1,38 @@
+<a id="readme-top"></a>
+
 # Bootcamp Eval — LiveBench Code-Gen Harness
 
-## What is this? (~100 words)
+An evaluation harness for stress-testing a multi-model, multi-strategy code-generation
+pipeline against **hard** competitive programming problems.
+
+<details>
+  <summary>Table of Contents</summary>
+  <ol>
+    <li><a href="#about-the-project">About The Project</a>
+      <ul><li><a href="#built-with">Built With</a></li></ul>
+    </li>
+    <li><a href="#getting-started">Getting Started</a>
+      <ul>
+        <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#installation">Installation</a></li>
+      </ul>
+    </li>
+    <li><a href="#usage">Usage</a>
+      <ul>
+        <li><a href="#1-select-problems">1. Select problems</a></li>
+        <li><a href="#2-run-the-eval">2. Run the eval</a></li>
+        <li><a href="#model--strategy-configuration">Model &amp; Strategy Configuration</a></li>
+        <li><a href="#pipeline-flow">Pipeline Flow</a></li>
+        <li><a href="#retry-mechanism">Retry Mechanism</a></li>
+        <li><a href="#detailed-logging">Detailed Logging</a></li>
+      </ul>
+    </li>
+    <li><a href="#function-reference">Function Reference</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+  </ol>
+</details>
+
+## About The Project
 
 This is an evaluation harness for stress-testing a code-generation pipeline against
 **hard** competitive programming problems from LiveBench's `LCB_generation` dataset
@@ -12,8 +44,6 @@ Failed attempts are retried with the error fed back to the model
 (up to `--max-retries` times). Results are reported as PASS/FAIL per problem with an
 overall score, and full detail is written to `results.json`.
 
-## Files
-
 | File | Purpose |
 |---|---|
 | `question.jsonl` | Raw LiveBench dataset |
@@ -24,7 +54,23 @@ overall score, and full detail is written to `results.json`.
 | `.env.example` | Template for environment variables (copy to `.env` and fill in) |
 | `requirements.txt` | Python dependencies |
 
-## Setup
+### Built With
+
+* Python (stdlib `subprocess`/`argparse`/`json` for the harness itself)
+* [openai](https://pypi.org/project/openai/) — OpenAI-compatible client used by `orchestrator.py` for every model call (DeepSeek, Qwen/Alibaba, MiMo, Gemma)
+* [python-dotenv](https://pypi.org/project/python-dotenv/) — loads `.env` config
+* [pytest](https://pypi.org/project/pytest/) — test suite for `orchestrator.py`/`run_eval.py`
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Getting Started
+
+### Prerequisites
+
+* Python 3.9+
+* API keys for whichever model providers you plan to use (DeepSeek, Alibaba/Qwen DashScope, MiMo, and/or Gemini)
+
+### Installation
 
 ```bash
 # 1. Install dependencies
@@ -32,19 +78,26 @@ pip install -r requirements.txt
 
 # 2. Configure API credentials
 cp .env.example .env
-# Fill in GEMINI_API_KEY in .env (get one at https://aistudio.google.com/apikey)
+# Fill in the provider keys/base URLs and role models you want to use — see
+# "Model & Strategy Configuration" below and .env.example for the full list.
 ```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Usage
 
+### 1. Select problems
+
 ```bash
-# 1. Pick problems
 python select_hard.py --n 5                     # top-5 hardest (deterministic)
 python select_hard.py --n 5 --random            # random sample from hard pool
 python select_hard.py --n 5 --random --seed 42  # reproducible random sample
 python select_hard.py --n 8 --include-atcoder   # include AtCoder problems too
+```
 
-# 2. Run the eval
+### 2. Run the eval
+
+```bash
 python run_eval.py                          # defaults: hard_subset.jsonl, 2 retries, STRATEGY env var (else "single")
 python run_eval.py --strategy single             # one model solves directly
 python run_eval.py --strategy analyze-then-code  # architect model plans, coder model implements
@@ -54,7 +107,22 @@ python run_eval.py --max-tests 3            # cap tests/problem (quick smoke run
 python run_eval.py --max-retries 3          # retry failing problems up to 3 times
 ```
 
-## Pipeline Flow
+### Model & Strategy Configuration
+
+Every "role" model is a `provider/model` string (e.g. `deepseek/deepseek-v4-flash`,
+`qwen/qwen3.7-plus`) resolved against a small provider registry in `orchestrator.py`
+(`PROVIDERS`) — each provider maps to a `base_url`/`api_key` pair configured in `.env`.
+
+| Strategy | Roles used | What happens |
+|---|---|---|
+| `single` | `SINGLE_MODEL` | One model solves the problem directly (today's default behavior). |
+| `analyze-then-code` | `ARCHITECT_MODEL`, `CODER_MODEL` | Architect proposes an approach; coder implements it. |
+| `debate` | `DEBATER1_MODEL`, `DEBATER2_MODEL`, `JUDGE_MODEL`, `CODER_MODEL` | 2 debaters each propose then revise (2 rounds); judge synthesizes a final approach; coder implements it. |
+
+`STRATEGY` in `.env` sets the default; `--strategy` on the command line overrides it.
+On a retry, only the coder step re-runs — the architect/debate stage is not repeated.
+
+### Pipeline Flow
 
 ```mermaid
 flowchart TD
@@ -78,7 +146,7 @@ flowchart TD
     F -->|all problems done| P[results.json + logs/run_*.json]
 ```
 
-## Retry Mechanism
+### Retry Mechanism
 
 The harness has two independent retry layers:
 
@@ -89,20 +157,14 @@ The harness has two independent retry layers:
 
 On a prompt-layer retry, the failing test's `input`, `expected`, and `got` are appended to the prompt so the model can fix its mistake.
 
-## Model & Strategy Configuration
+### Detailed Logging
 
-Every "role" model is a `provider/model` string (e.g. `deepseek/deepseek-v4-flash`,
-`qwen/qwen3.7-plus`) resolved against a small provider registry in `orchestrator.py`
-(`PROVIDERS`) — each provider maps to a `base_url`/`api_key` pair configured in `.env`.
+Every `run_eval.py` run writes `logs/run_<timestamp>.json` with the full prompt/reply/
+test-result trace for every problem (architect analysis, debate rounds, every coder
+attempt) — `results.json` stays a concise summary; this is the file to open when
+debugging why a specific attempt failed.
 
-| Strategy | Roles used | What happens |
-|---|---|---|
-| `single` | `SINGLE_MODEL` | One model solves the problem directly (today's default behavior). |
-| `analyze-then-code` | `ARCHITECT_MODEL`, `CODER_MODEL` | Architect proposes an approach; coder implements it. |
-| `debate` | `DEBATER1_MODEL`, `DEBATER2_MODEL`, `JUDGE_MODEL`, `CODER_MODEL` | 2 debaters each propose then revise (2 rounds); judge synthesizes a final approach; coder implements it. |
-
-`STRATEGY` in `.env` sets the default; `--strategy` on the command line overrides it.
-On a retry, only the coder step re-runs — the architect/debate stage is not repeated.
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Function Reference
 
@@ -143,13 +205,10 @@ On a retry, only the coder step re-runs — the architect/debate stage is not re
 | `active_role_models(strategy)` | Returns the role → `provider/model` mapping in effect for a strategy. |
 | `write_run_log(path, run_log)` | Writes the full per-run debug log as JSON, creating `logs/` if needed. |
 
-### Detailed logging
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-Every `run_eval.py` run writes `logs/run_<timestamp>.json` with the full prompt/reply/
-test-result trace for every problem (architect analysis, debate rounds, every coder
-attempt) — `results.json` stays a concise summary; this is the file to open when
-debugging why a specific attempt failed.
+## Roadmap
 
-## What's Still Missing
+- [ ] CI / lint config (no `.github/workflows`, no `pyproject.toml` yet)
 
-- **No CI / lint config** (no `.github/workflows`, no `pyproject.toml`).
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
