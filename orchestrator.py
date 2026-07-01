@@ -14,6 +14,7 @@ full design.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -277,3 +278,12 @@ def plan(strategy: str, prompt: str) -> tuple:
     if strategy == "debate":
         return _run_debate_plan(prompt)
     raise ConfigError(f"Unknown strategy {strategy!r}; expected one of {STRATEGIES}")
+
+
+def write_run_log(path: str, run_log: dict) -> None:
+    """Write the full per-run debug log as pretty JSON, creating logs/ if needed."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(run_log, fh, indent=2, ensure_ascii=False)
