@@ -190,3 +190,34 @@ def code(strategy: str, original_prompt: str, plan_text=None, prev_code=None, fa
         "code": extract_code(reply),
         "duration_s": duration,
     }
+
+
+_ARCHITECT_PROMPT_TMPL = (
+    "{problem}\n\n"
+    "Analyze this problem and describe your solution approach in plain text: the "
+    "key idea, algorithm, and time/space complexity. Do NOT write code — just the "
+    "approach."
+)
+
+
+def _run_analyze_then_code_plan(prompt: str) -> tuple:
+    role_model = os.environ["ARCHITECT_MODEL"]
+    architect_prompt = _ARCHITECT_PROMPT_TMPL.format(problem=prompt)
+    reply, duration = _chat(role_model, architect_prompt)
+    event = {
+        "role": "architect", "model": role_model,
+        "prompt": architect_prompt, "reply": reply, "duration_s": duration,
+    }
+    return reply, [event]
+
+
+def plan(strategy: str, prompt: str) -> tuple:
+    """Run strategy's planning stage once per problem.
+    Returns (plan_text_or_None, events)."""
+    if strategy == "single":
+        return None, []
+    if strategy == "analyze-then-code":
+        return _run_analyze_then_code_plan(prompt)
+    if strategy == "debate":
+        raise NotImplementedError("debate strategy is added in a later task")
+    raise ConfigError(f"Unknown strategy {strategy!r}; expected one of {STRATEGIES}")
