@@ -617,13 +617,13 @@ def plan(strategy: str, prompt: str) -> tuple:
     if strategy == "analyze-then-code":
         return _run_analyze_then_code_plan(prompt)
     if strategy == "debate":
-        return _run_debate_plan(prompt)
+        raise NotImplementedError("debate strategy is added in a later task")
     raise ConfigError(f"Unknown strategy {strategy!r}; expected one of {STRATEGIES}")
 ```
 
-Note: `_run_debate_plan` is referenced but not yet defined — that's fine, Python only
-resolves the name when the `debate` branch actually executes, and Task 4's tests never
-take that branch. Task 5 defines it.
+Note: the `debate` branch is a placeholder `NotImplementedError` for now — Task 5
+replaces this one line with a real call to `_run_debate_plan`, which it also defines.
+This avoids referencing a not-yet-defined name.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -766,12 +766,28 @@ def _run_debate_plan(prompt: str) -> tuple:
     return judge_reply, events
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Wire the `debate` branch in `plan()`**
+
+In `orchestrator.py`, replace the placeholder line in `plan()`:
+
+```python
+    if strategy == "debate":
+        raise NotImplementedError("debate strategy is added in a later task")
+```
+
+with:
+
+```python
+    if strategy == "debate":
+        return _run_debate_plan(prompt)
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `pytest tests/test_orchestrator_plan.py -v`
 Expected: PASS (4 passed)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add orchestrator.py tests/test_orchestrator_plan.py
