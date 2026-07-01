@@ -62,6 +62,8 @@ import sys
 import tempfile
 import time
 
+import orchestrator
+
 # ---------------------------------------------------------------------------
 # THE ONE PLUGGABLE HOOK
 # ---------------------------------------------------------------------------
@@ -346,6 +348,61 @@ def evaluate_problem(p: dict, code: str, timeout: float, max_tests: int) -> dict
         "tests_passed": passed,
         "first_failure": first_failure,
     }
+
+
+def solve_problem(p: dict, strategy: str, timeout: float, max_tests: int, max_retries: int) -> tuple:
+    """Run one problem end-to-end: plan() once, then code()+evaluate up to
+    max_retries+1 attempts. Returns (result, log_entry).
+    result matches the existing results.json per-problem shape.
+    log_entry is the full JSON-loggable trace (plan/debate events + every attempt)."""
+    original_prompt = p["prompt"]
+    log_entry = {**_meta(p), "plan_events": [], "debate_events": [], "attempts": [], "solved": False}
+
+    try:
+        plan_text, events = orchestrator.plan(strategy, original_prompt)
+    except Exception as exc:
+        log_entry["error"] = str(exc)
+        return {**_meta(p), "solved": False, "error": str(exc), "attempts": 0}, log_entry
+
+    if strategy == "debate":
+        log_entry["debate_events"] = events
+    else:
+        log_entry["plan_events"] = events
+
+    prev_code = None
+    failure = None
+    ev = None
+    attempt_result = None
+    attempt = 0
+    for attempt in range(1, max_retries + 2):  # 1 initial + N retries
+        try:
+            attempt_result = orchestrator.code(strategy, original_prompt, plan_text, prev_code, failure)
+        except Exception as exc:
+            log_entry["error"] = str(exc)
+            return {**_meta(p), "solved": False, "error": str(exc), "attempts": attempt}, log_entry
+
+        code_text = attempt_result["code"]
+        ev = evaluate_problem(p, code_text, timeout, max_tests)
+        log_entry["attempts"].append({
+            "attempt": attempt,
+            "model": attempt_result["model"],
+            "prompt": attempt_result["prompt"],
+            "reply": attempt_result["reply"],
+            "code": code_text,
+            "duration_s": attempt_result["duration_s"],
+            "test_result": ev,
+        })
+        prev_code = code_text
+        if ev["solved"] or attempt == max_retries + 1:
+            break
+        failure = ev["first_failure"]
+
+    log_entry["solved"] = bool(ev and ev["solved"])
+    result = {
+        **_meta(p), **ev, "code": prev_code,
+        "reply_len": len(attempt_result["reply"]), "attempts": attempt,
+    }
+    return result, log_entry
 
 
 # ---------------------------------------------------------------------------
