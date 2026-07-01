@@ -153,13 +153,6 @@ def extract_code(text: str) -> str:
     return (text or "").strip()
 
 
-_CODER_MODEL_ENV = {
-    "single": "SINGLE_MODEL",
-    "analyze-then-code": "CODER_MODEL",
-    "debate": "CODER_MODEL",
-}
-
-
 def _build_coder_prompt(original_prompt: str, plan_text, prev_code, failure) -> str:
     parts = [original_prompt]
     if plan_text:
@@ -186,7 +179,8 @@ def _build_coder_prompt(original_prompt: str, plan_text, prev_code, failure) -> 
 def code(strategy: str, original_prompt: str, plan_text=None, prev_code=None, failure=None) -> dict:
     """Run the coder step once.
     Returns {"model", "prompt", "reply", "code", "duration_s"}."""
-    role_model = os.environ[_CODER_MODEL_ENV[strategy]]
+    role_models = active_role_models(strategy)
+    role_model = role_models.get("coder", role_models.get("single"))
     prompt = _build_coder_prompt(original_prompt, plan_text, prev_code, failure)
     reply, duration = _chat(role_model, prompt)
     return {
