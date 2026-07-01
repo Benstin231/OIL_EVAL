@@ -15,6 +15,7 @@ full design.
 from __future__ import annotations
 
 import os
+import re
 import time
 
 
@@ -138,3 +139,60 @@ def _chat(role_model: str, prompt: str) -> tuple:
     start = time.monotonic()
     reply = _call_with_retry(role_model, prompt)
     return reply, time.monotonic() - start
+
+
+_FENCE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def extract_code(text: str) -> str:
+    """Pull the program out of a model reply. Prefer a ```python fenced block;
+    if several, take the longest; fall back to the raw text."""
+    blocks = _FENCE.findall(text or "")
+    if blocks:
+        return max(blocks, key=len).strip()
+    return (text or "").strip()
+
+
+_CODER_MODEL_ENV = {
+    "single": "SINGLE_MODEL",
+    "analyze-then-code": "CODER_MODEL",
+    "debate": "CODER_MODEL",
+}
+
+
+def _build_coder_prompt(original_prompt: str, plan_text, prev_code, failure) -> str:
+    parts = [original_prompt]
+    if plan_text:
+        parts.append(
+            "\n\nA solution approach has been proposed for this problem:\n"
+            f"{plan_text}\n\n"
+            "Implement it as a complete Python program. Enclose the code in a "
+            "```python fenced block.\n"
+        )
+    if prev_code is not None and failure is not None:
+        parts.append(
+            "\n\nYour previous attempt below failed on a test case. Fix the bug and "
+            "return a corrected, complete Python program. Enclose the code in a "
+            "```python fenced block.\n\n"
+            f"Previous code:\n```python\n{prev_code}\n```\n\n"
+            f"Failing test #{failure['index']} ({failure['type']}):\n"
+            f"Input:\n{failure['input']}\n"
+            f"Expected output:\n{failure['expected']}\n"
+            f"Your code produced:\n{failure['got']}\n"
+        )
+    return "".join(parts)
+
+
+def code(strategy: str, original_prompt: str, plan_text=None, prev_code=None, failure=None) -> dict:
+    """Run the coder step once.
+    Returns {"model", "prompt", "reply", "code", "duration_s"}."""
+    role_model = os.environ[_CODER_MODEL_ENV[strategy]]
+    prompt = _build_coder_prompt(original_prompt, plan_text, prev_code, failure)
+    reply, duration = _chat(role_model, prompt)
+    return {
+        "model": role_model,
+        "prompt": prompt,
+        "reply": reply,
+        "code": extract_code(reply),
+        "duration_s": duration,
+    }
