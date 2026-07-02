@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Do not change the signatures of `orchestrator.plan()` or `orchestrator.code()` — several existing tests monkeypatch these with the current arity (`tests/test_run_eval_solve_problem.py`, `tests/test_run_eval_main_integration.py`).
-- Every new progress `print()` must pass `flush=True` (spec: avoid buffered output stalling on Windows during blocking network calls).
+- Every new progress `print()` that sits around a blocking model call (Tasks 2-4) must pass `flush=True` (spec: avoid buffered output stalling on Windows during blocking network calls). The one-shot startup banner (Task 1) is explicitly exempt — clarified 2026-07-02 after task review — since it prints once, outside any wait loop, and is immediately followed by normal execution.
 - No background threads, spinners, or heartbeat timers (spec's explicit non-goal — user chose stage-level messages only).
 - No per-test-case printing inside `evaluate_problem()` (spec's explicit non-goal).
 - Follow the design in `docs/superpowers/specs/2026-07-02-run-eval-progress-visibility-design.md`.
