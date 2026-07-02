@@ -299,6 +299,12 @@ def load_subset(path: str) -> list:
     return out
 
 
+def _format_models_lines(role_models: dict) -> list:
+    """Format a role->'provider/model' mapping as 'ROLE_MODEL = value' lines,
+    in the same order as active_role_models() returns them."""
+    return [f"  {role.upper()}_MODEL = {model}" for role, model in role_models.items()]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="LiveBench-style code eval harness")
     ap.add_argument("--subset", default="hard_subset.jsonl",
@@ -332,7 +338,12 @@ def main() -> None:
                  f"Run:  python select_hard.py --n 5")
 
     problems = load_subset(args.subset)
-    print(f"Loaded {len(problems)} problems from {args.subset}  [strategy={strategy}]\n")
+    role_models = orchestrator.active_role_models(strategy)
+    print(f"Loaded {len(problems)} problems from {args.subset}  [strategy={strategy}]")
+    print("Models:")
+    for line in _format_models_lines(role_models):
+        print(line)
+    print()
 
     results = []
     log_problems = []
