@@ -316,7 +316,16 @@ def _format_models_lines(role_models: dict) -> list:
     return [f"  {role.upper()}_MODEL = {model}" for role, model in role_models.items()]
 
 
+def _format_duration(seconds: float) -> str:
+    """Format a duration as '12.3s' (under a minute) or '4m32s' (a minute or more)."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m{secs}s"
+
+
 def main() -> None:
+    run_start = time.monotonic()
     ap = argparse.ArgumentParser(description="LiveBench-style code eval harness")
     ap.add_argument("--subset", default="hard_subset.jsonl",
                     help="JSONL of normalised problems (from select_hard.py)")
@@ -392,6 +401,7 @@ def main() -> None:
     total = len(problems)
     score = solved / total if total else 0.0
     print(f"\n==== SCORE: {solved}/{total} solved  ({score:.0%}) ====")
+    print(f"Total time: {_format_duration(time.monotonic() - run_start)}")
 
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump({
