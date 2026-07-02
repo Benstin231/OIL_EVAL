@@ -12,3 +12,4 @@ __pycache__/
 hard_subset.jsonl
 results.json
 logs/
+.worktrees/
