@@ -250,12 +250,18 @@ def solve_problem(p: dict, strategy: str, timeout: float, max_tests: int, max_re
     else:
         log_entry["plan_events"] = events
 
+    role_models = orchestrator.active_role_models(strategy)
+    coder_model = role_models.get("coder", role_models.get("single"))
+    total_attempts = max_retries + 1
+
     prev_code = None
     failure = None
     ev = None
     attempt_result = None
     attempt = 0
     for attempt in range(1, max_retries + 2):  # 1 initial + N retries
+        print(f"        -> coding attempt {attempt}/{total_attempts} ({coder_model})...",
+              flush=True)
         try:
             attempt_result = orchestrator.code(strategy, original_prompt, plan_text, prev_code, failure)
         except Exception as exc:
@@ -263,7 +269,12 @@ def solve_problem(p: dict, strategy: str, timeout: float, max_tests: int, max_re
             return {**_meta(p), "solved": False, "error": str(exc), "attempts": attempt}, log_entry
 
         code_text = attempt_result["code"]
+        print(f"        -> coding attempt {attempt}/{total_attempts} done "
+              f"({attempt_result['duration_s']:.1f}s), running tests...", flush=True)
         ev = evaluate_problem(p, code_text, timeout, max_tests)
+        will_retry = not ev["solved"] and attempt < total_attempts
+        print(f"        -> attempt {attempt}: {ev['tests_passed']}/{ev['num_tests']} tests passed"
+              + (", retrying..." if will_retry else ""), flush=True)
         log_entry["attempts"].append({
             "attempt": attempt,
             "model": attempt_result["model"],
@@ -351,6 +362,8 @@ def main() -> None:
     for n, p in enumerate(problems, 1):
         title = p.get("title", "(untitled)")
         diff = p.get("difficulty", "?")
+
+        print(f"[{n}/{len(problems)}] {diff:6s}  {title}", flush=True)
 
         result, log_entry = solve_problem(p, strategy, args.timeout, args.max_tests, args.max_retries)
         log_problems.append(log_entry)

@@ -12,6 +12,8 @@ def _problem(**overrides):
 
 
 def test_solve_problem_calls_plan_once_regardless_of_retries(monkeypatch):
+    monkeypatch.setenv("ARCHITECT_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("CODER_MODEL", "deepseek/deepseek-v4-flash")
     plan_calls = []
     code_calls = []
 
@@ -58,6 +60,8 @@ def test_solve_problem_calls_plan_once_regardless_of_retries(monkeypatch):
 
 
 def test_solve_problem_stops_after_max_retries_when_never_solved(monkeypatch):
+    monkeypatch.setenv("SINGLE_MODEL", "deepseek/deepseek-v4-flash")
+
     def fake_plan(strategy, prompt):
         return None, []
 
@@ -101,6 +105,8 @@ def test_solve_problem_records_error_when_plan_raises(monkeypatch):
 
 
 def test_solve_problem_records_error_when_code_raises(monkeypatch):
+    monkeypatch.setenv("SINGLE_MODEL", "deepseek/deepseek-v4-flash")
+
     def fake_plan(strategy, prompt):
         return None, []
 
@@ -117,3 +123,32 @@ def test_solve_problem_records_error_when_code_raises(monkeypatch):
     assert result["solved"] is False
     assert "401 Unauthorized" in result["error"]
     assert result["attempts"] == 1
+
+
+def test_solve_problem_prints_attempt_progress(monkeypatch, capsys):
+    monkeypatch.setenv("SINGLE_MODEL", "deepseek/deepseek-v4-flash")
+
+    def fake_plan(strategy, prompt):
+        return None, []
+
+    def fake_code(strategy, original_prompt, plan_text, prev_code, failure):
+        return {"model": "m", "prompt": "cp", "reply": "bad", "code": "bad", "duration_s": 0.1}
+
+    def fake_evaluate(p, code, timeout, max_tests):
+        return {"solved": False, "num_tests": 1, "tests_passed": 0,
+                "first_failure": {"index": 0, "type": "WRONG_ANSWER",
+                                   "input": "1", "expected": "2", "got": "3"}}
+
+    monkeypatch.setattr(run_eval.orchestrator, "plan", fake_plan)
+    monkeypatch.setattr(run_eval.orchestrator, "code", fake_code)
+    monkeypatch.setattr(run_eval, "evaluate_problem", fake_evaluate)
+
+    run_eval.solve_problem(_problem(), "single", timeout=5.0, max_tests=0, max_retries=1)
+
+    out = capsys.readouterr().out
+    assert "coding attempt 1/2 (deepseek/deepseek-v4-flash)..." in out
+    assert "coding attempt 1/2 done (0.1s), running tests..." in out
+    assert "attempt 1: 0/1 tests passed, retrying..." in out
+    assert "coding attempt 2/2 (deepseek/deepseek-v4-flash)..." in out
+    last_attempt_line = out.split("coding attempt 2/2 done")[1]
+    assert "retrying..." not in last_attempt_line

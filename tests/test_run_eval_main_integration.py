@@ -112,3 +112,44 @@ def test_main_prints_models_banner(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Models:" in out
     assert "SINGLE_MODEL = deepseek/deepseek-v4-flash" in out
+
+
+def test_main_prints_problem_header_before_result(tmp_path, monkeypatch, capsys):
+    subset_path = os.path.join(str(tmp_path), "subset.jsonl")
+    problem = {
+        "question_id": "q1", "title": "Two Sum", "platform": "leetcode",
+        "difficulty": "hard", "fn_name": "twoSum", "prompt": "PROBLEM TEXT",
+        "tests": [{"input": "1\n2\n", "output": "3", "testtype": "stdin"}],
+    }
+    with open(subset_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(problem) + "\n")
+
+    out_path = os.path.join(str(tmp_path), "results.json")
+
+    monkeypatch.setenv("STRATEGY", "single")
+    monkeypatch.setenv("SINGLE_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    def fake_plan(strategy, prompt):
+        return None, []
+
+    def fake_code(strategy, original_prompt, plan_text, prev_code, failure):
+        return {"model": "deepseek/deepseek-v4-flash", "prompt": original_prompt,
+                "reply": "```python\nprint(3)\n```", "code": "print(3)", "duration_s": 0.05}
+
+    monkeypatch.setattr(orchestrator, "plan", fake_plan)
+    monkeypatch.setattr(orchestrator, "code", fake_code)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "run_eval.py", "--subset", subset_path, "--out", out_path,
+        "--max-tests", "1", "--max-retries", "0",
+    ])
+
+    run_eval.main()
+
+    out = capsys.readouterr().out
+    header_idx = out.index("[1/1] hard    Two Sum")
+    result_idx = out.index("[1/1] PASS")
+    assert header_idx < result_idx
