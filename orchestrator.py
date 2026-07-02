@@ -246,25 +246,36 @@ def _run_debate_plan(prompt: str) -> tuple:
     judge_model = role_models["judge"]
 
     r1_prompt = _DEBATE_ROUND1_TMPL.format(problem=prompt)
+    print(f"        -> debate round 1: debater1 ({d1_model})...", flush=True)
     d1_r1, dur = _chat(d1_model, r1_prompt)
+    print(f"        -> debate round 1: debater1 done ({dur:.1f}s)", flush=True)
     events.append({"round": 1, "role": "debater1", "model": d1_model,
                     "prompt": r1_prompt, "reply": d1_r1, "duration_s": dur})
+
+    print(f"        -> debate round 1: debater2 ({d2_model})...", flush=True)
     d2_r1, dur = _chat(d2_model, r1_prompt)
+    print(f"        -> debate round 1: debater2 done ({dur:.1f}s)", flush=True)
     events.append({"round": 1, "role": "debater2", "model": d2_model,
                     "prompt": r1_prompt, "reply": d2_r1, "duration_s": dur})
 
     d1_r2_prompt = _DEBATE_ROUND2_TMPL.format(problem=prompt, own=d1_r1, other=d2_r1)
+    print(f"        -> debate round 2: debater1...", flush=True)
     d1_r2, dur = _chat(d1_model, d1_r2_prompt)
+    print(f"        -> debate round 2: debater1 done ({dur:.1f}s)", flush=True)
     events.append({"round": 2, "role": "debater1", "model": d1_model,
                     "prompt": d1_r2_prompt, "reply": d1_r2, "duration_s": dur})
 
     d2_r2_prompt = _DEBATE_ROUND2_TMPL.format(problem=prompt, own=d2_r1, other=d1_r1)
+    print(f"        -> debate round 2: debater2...", flush=True)
     d2_r2, dur = _chat(d2_model, d2_r2_prompt)
+    print(f"        -> debate round 2: debater2 done ({dur:.1f}s)", flush=True)
     events.append({"round": 2, "role": "debater2", "model": d2_model,
                     "prompt": d2_r2_prompt, "reply": d2_r2, "duration_s": dur})
 
     judge_prompt = _JUDGE_TMPL.format(problem=prompt, d1=d1_r2, d2=d2_r2)
+    print(f"        -> judge synthesizing...", flush=True)
     judge_reply, dur = _chat(judge_model, judge_prompt)
+    print(f"        -> judge done ({dur:.1f}s)", flush=True)
     events.append({"role": "judge", "model": judge_model,
                     "prompt": judge_prompt, "reply": judge_reply, "duration_s": dur})
 

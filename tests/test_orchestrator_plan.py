@@ -97,3 +97,26 @@ def test_plan_debate_runs_two_rounds_plus_judge(monkeypatch):
     # judge prompt must reference both debaters' round-2 replies
     assert "debater1 round2 approach" in events[4]["prompt"]
     assert "debater2 round2 approach" in events[4]["prompt"]
+
+
+def test_plan_debate_prints_progress_for_all_five_calls(monkeypatch, capsys):
+    monkeypatch.setenv("DEBATER1_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("DEBATER2_MODEL", "qwen/qwen3.7-plus")
+    monkeypatch.setenv("JUDGE_MODEL", "mimo/mimo-v2.5")
+    monkeypatch.setenv("CODER_MODEL", "deepseek/deepseek-v4-flash")
+
+    def fake_chat(role_model, prompt):
+        return "approach", 0.1
+
+    monkeypatch.setattr(orchestrator, "_chat", fake_chat)
+    orchestrator.plan("debate", "PROBLEM")
+
+    out = capsys.readouterr().out
+    assert "debate round 1: debater1 (deepseek/deepseek-v4-flash)..." in out
+    assert "debate round 1: debater1 done (0.1s)" in out
+    assert "debate round 1: debater2 (qwen/qwen3.7-plus)..." in out
+    assert "debate round 1: debater2 done (0.1s)" in out
+    assert "debate round 2: debater1..." in out
+    assert "debate round 2: debater2..." in out
+    assert "judge synthesizing..." in out
+    assert "judge done (0.1s)" in out
