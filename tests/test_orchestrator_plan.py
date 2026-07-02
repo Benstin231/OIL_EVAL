@@ -30,6 +30,21 @@ def test_plan_analyze_then_code_calls_architect(monkeypatch):
     }]
 
 
+def test_plan_analyze_then_code_prints_progress(monkeypatch, capsys):
+    monkeypatch.setenv("ARCHITECT_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("CODER_MODEL", "deepseek/deepseek-v4-flash")
+
+    def fake_chat(role_model, prompt):
+        return "use a two-pointer approach", 1.1
+
+    monkeypatch.setattr(orchestrator, "_chat", fake_chat)
+    orchestrator.plan("analyze-then-code", "PROBLEM STATEMENT")
+
+    out = capsys.readouterr().out
+    assert "planning (architect, deepseek/deepseek-v4-flash)..." in out
+    assert "planning done (1.1s)" in out
+
+
 def test_plan_unknown_strategy_raises():
     try:
         orchestrator.plan("nonsense", "PROBLEM")

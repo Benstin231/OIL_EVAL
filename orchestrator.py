@@ -204,7 +204,9 @@ _ARCHITECT_PROMPT_TMPL = (
 def _run_analyze_then_code_plan(prompt: str) -> tuple:
     role_model = active_role_models("analyze-then-code")["architect"]
     architect_prompt = _ARCHITECT_PROMPT_TMPL.format(problem=prompt)
+    print(f"        -> planning (architect, {role_model})...", flush=True)
     reply, duration = _chat(role_model, architect_prompt)
+    print(f"        -> planning done ({duration:.1f}s)", flush=True)
     event = {
         "role": "architect", "model": role_model,
         "prompt": architect_prompt, "reply": reply, "duration_s": duration,
