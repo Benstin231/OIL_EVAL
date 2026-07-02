@@ -479,3 +479,128 @@ Expected: all PASS.
 git add orchestrator.py tests/test_orchestrator_plan.py
 git commit -m "feat: print debate round and judge progress during plan stage"
 ```
+
+---
+
+### Task 5: Total elapsed time at end of run
+
+> Added 2026-07-03 after the user asked, mid-implementation, for a total wall-clock time to complement the per-stage timings from Tasks 2-4.
+
+**Files:**
+- Modify: `run_eval.py` — `main()` (add a start-time capture near the top of the function, and a total-time print after the `SCORE` line)
+- Test: `tests/test_run_eval_main_integration.py`
+
+**Interfaces:**
+- Produces: `run_eval._format_duration(seconds: float) -> str` — pure formatter, e.g. `12.3` -> `"12.3s"`, `272.0` -> `"4m32s"`. No other task depends on this.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `tests/test_run_eval_main_integration.py`:
+
+```python
+def test_format_duration_under_a_minute():
+    assert run_eval._format_duration(12.34) == "12.3s"
+
+
+def test_format_duration_over_a_minute():
+    assert run_eval._format_duration(272.0) == "4m32s"
+
+
+def test_main_prints_total_time_after_score(tmp_path, monkeypatch, capsys):
+    subset_path = os.path.join(str(tmp_path), "subset.jsonl")
+    problem = {
+        "question_id": "q1", "title": "Two Sum", "platform": "leetcode",
+        "difficulty": "hard", "fn_name": "twoSum", "prompt": "PROBLEM TEXT",
+        "tests": [{"input": "1\n2\n", "output": "3", "testtype": "stdin"}],
+    }
+    with open(subset_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(problem) + "\n")
+
+    out_path = os.path.join(str(tmp_path), "results.json")
+
+    monkeypatch.setenv("STRATEGY", "single")
+    monkeypatch.setenv("SINGLE_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+
+    def fake_plan(strategy, prompt):
+        return None, []
+
+    def fake_code(strategy, original_prompt, plan_text, prev_code, failure):
+        return {"model": "deepseek/deepseek-v4-flash", "prompt": original_prompt,
+                "reply": "```python\nprint(3)\n```", "code": "print(3)", "duration_s": 0.05}
+
+    monkeypatch.setattr(orchestrator, "plan", fake_plan)
+    monkeypatch.setattr(orchestrator, "code", fake_code)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", [
+        "run_eval.py", "--subset", subset_path, "--out", out_path,
+        "--max-tests", "1", "--max-retries", "0",
+    ])
+
+    run_eval.main()
+
+    out = capsys.readouterr().out
+    score_idx = out.index("==== SCORE:")
+    total_time_idx = out.index("Total time:")
+    assert score_idx < total_time_idx
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest tests/test_run_eval_main_integration.py -q`
+Expected: `test_format_duration_under_a_minute` and `test_format_duration_over_a_minute` FAIL with `AttributeError: module 'run_eval' has no attribute '_format_duration'`; `test_main_prints_total_time_after_score` FAILs with `ValueError: substring not found` on `total_time_idx`.
+
+- [ ] **Step 3: Implement**
+
+In `run_eval.py`, add this function near `_format_models_lines` (same helper-function area, before `def main() -> None:`):
+
+```python
+def _format_duration(seconds: float) -> str:
+    """Format a duration as '12.3s' (under a minute) or '4m32s' (a minute or more)."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m{secs}s"
+```
+
+In `main()`, find the current top of the function — read the file first, since Tasks 1-2 already changed line numbers from the original plan. Add a start-time capture as the first statement inside `main()`, before argument parsing:
+
+```python
+def main() -> None:
+    run_start = time.monotonic()
+    ap = argparse.ArgumentParser(description="LiveBench-style code eval harness")
+    ...
+```
+
+(`time` is already imported at the top of `run_eval.py` — it's used later for the log-file timestamp. No new import needed.)
+
+Then find the existing line that prints the score summary:
+
+```python
+    print(f"\n==== SCORE: {solved}/{total} solved  ({score:.0%}) ====")
+```
+
+Add immediately after it:
+
+```python
+    print(f"Total time: {_format_duration(time.monotonic() - run_start)}")
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pytest tests/test_run_eval_main_integration.py -q`
+Expected: all PASS.
+
+- [ ] **Step 5: Run full suite to check for regressions**
+
+Run: `pytest -q`
+Expected: all PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add run_eval.py tests/test_run_eval_main_integration.py
+git commit -m "feat: print total elapsed time at end of run_eval"
+```
